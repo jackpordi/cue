@@ -1,0 +1,15 @@
+[package]
+name = "cue-common"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Common library for cue monorepo orchestration tool"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+chrono = { workspace = true, features = ["serde"] }
+thiserror = { workspace = true }

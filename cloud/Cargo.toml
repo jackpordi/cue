@@ -1,0 +1,26 @@
+[package]
+name = "cue-cloud"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Cloud service for cue monorepo orchestration tool"
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "cue-cloud"
+path = "src/main.rs"
+
+[dependencies]
+cue-common = { path = "../common" }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true, features = ["cors"] }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace =true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+chrono = { workspace = true, features = ["serde"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "sqlite"] }
