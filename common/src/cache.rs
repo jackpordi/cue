@@ -8,13 +8,15 @@ pub struct CacheKey {
     pub task_name: String,
     pub inputs_hash: String,
     pub workspace_hash: String,
+    pub command_hash: String,
+    pub environment_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheEntry {
     pub id: Uuid,
     pub key: CacheKey,
-    pub outputs: HashMap<String, String>,
+    pub outputs: HashMap<String, String>, // path -> blob_hash
     pub metadata: CacheMetadata,
     pub created_at: DateTime<Utc>,
     pub accessed_at: DateTime<Utc>,
@@ -24,8 +26,8 @@ pub struct CacheEntry {
 pub struct CacheMetadata {
     pub duration_ms: u64,
     pub exit_code: i32,
-    pub stdout: String,
-    pub stderr: String,
+    pub stdout_hash: Option<String>,
+    pub stderr_hash: Option<String>,
     pub dependencies: Vec<String>,
 }
 
@@ -44,5 +46,33 @@ pub struct WorkspaceConfig {
     pub name: String,
     pub tasks: HashMap<String, TaskDefinition>,
     pub cache_dir: Option<String>,
-    pub remote_cache_url: Option<String>,
+    pub cache_size_limit: Option<String>,
+    pub cache_max_age: Option<String>,
+}
+
+// CAS-related types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlobInfo {
+    pub hash: String,
+    pub size: u64,
+    pub ref_count: u32,
+    pub last_access: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionInfo {
+    pub id: Uuid,
+    pub cache_key: String,
+    pub exit_code: i32,
+    pub stdout_hash: Option<String>,
+    pub stderr_hash: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub last_access: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutputMapping {
+    pub action_id: Uuid,
+    pub blob_hash: String,
+    pub relative_path: String,
 }

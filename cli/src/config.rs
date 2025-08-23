@@ -16,7 +16,8 @@ impl ConfigManager {
             name: "default".to_string(),
             tasks: std::collections::HashMap::new(),
             cache_dir: Some(".cue/cache".to_string()),
-            remote_cache_url: None,
+            cache_size_limit: Some("10GB".to_string()),
+            cache_max_age: Some("30d".to_string()),
         })
     }
 }

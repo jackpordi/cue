@@ -14,6 +14,15 @@ pub enum CueError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     
+    #[error("Database error: {0}")]
+    Database(#[from] sqlx::Error),
+    
+    #[error("UUID error: {0}")]
+    Uuid(#[from] uuid::Error),
+    
+    #[error("Chrono error: {0}")]
+    Chrono(#[from] chrono::ParseError),
+    
     #[error("Invalid configuration: {0}")]
     Config(String),
     

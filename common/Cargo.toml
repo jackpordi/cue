@@ -13,3 +13,4 @@ serde_json = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
 chrono = { workspace = true, features = ["serde"] }
 thiserror = { workspace = true }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "chrono"] }

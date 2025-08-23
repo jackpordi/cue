@@ -7,7 +7,7 @@ mod cache;
 mod config;
 mod executor;
 
-use commands::{run_execute, build_execute, test_execute, clean_execute};
+use commands::{run_execute, build_execute, test_execute, clean_execute, cache_execute, CacheCommands};
 
 #[derive(Parser)]
 #[command(name = "cue")]
@@ -56,7 +56,15 @@ enum Commands {
         #[arg(long, default_value = "false")]
         cache: bool,
     },
+    
+    /// Manage cache
+    Cache {
+        #[command(subcommand)]
+        subcommand: CacheCommands,
+    },
 }
+
+
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -87,6 +95,9 @@ async fn main() -> Result<()> {
         }
         Commands::Clean { cache } => {
             clean_execute(cache).await?;
+        }
+        Commands::Cache { subcommand } => {
+            cache_execute(subcommand).await?;
         }
     }
     
