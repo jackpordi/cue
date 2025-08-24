@@ -83,25 +83,37 @@ pub async fn execute(
                 // Restore stdout/stderr if available
                 if let Some(stdout_hash) = &cache_entry.metadata.stdout_hash {
                     if let Ok(stdout_content) = cache_manager.cas.get_content(stdout_hash).await {
-                        debug!("STDOUT: {}", String::from_utf8_lossy(&stdout_content));
+                        if !stdout_content.is_empty() {
+                            // Write raw bytes to preserve colors
+                            use std::io::Write;
+                            std::io::stdout().write_all(&stdout_content).ok();
+                        }
                     }
                 }
                 
                 if let Some(stderr_hash) = &cache_entry.metadata.stderr_hash {
                     if let Ok(stderr_content) = cache_manager.cas.get_content(stderr_hash).await {
-                        debug!("STDERR: {}", String::from_utf8_lossy(&stderr_content));
+                        if !stderr_content.is_empty() {
+                            // Write raw bytes to preserve colors
+                            use std::io::Write;
+                            std::io::stderr().write_all(&stderr_content).ok();
+                        }
                     }
                 }
                 
-                let total_time = start_time.elapsed();
-                let total_ms = total_time.as_millis() as u64;
-                let saved_ms = cache_entry.metadata.duration_ms as u64;
+                // For cache hits, show the time taken vs the original execution time
+                let cache_hit_time = start_time.elapsed();
+                let cache_hit_ms = cache_hit_time.as_millis() as u64;
+                let original_duration_ms = cache_entry.metadata.duration_ms as u64;
                 
-                if saved_ms > 0 {
-                    // Show how much time was saved compared to the original execution
-                    info!("{} Task took {}ms (would have taken {}ms)", "Cache hit".green(), total_ms, saved_ms);
+                if original_duration_ms > cache_hit_ms {
+                    let saved_ms = original_duration_ms - cache_hit_ms;
+                    let cache_hit_str = if cache_hit_ms >= 1000 { format!("{:.1}s", cache_hit_ms as f64 / 1000.0) } else { format!("{}ms", cache_hit_ms) };
+                    let saved_str = if saved_ms >= 1000 { format!("{:.1}s", saved_ms as f64 / 1000.0) } else { format!("{}ms", saved_ms) };
+                    info!("{} Task took {} (saved {})", "Cache hit".green(), cache_hit_str, saved_str);
                 } else {
-                    info!("{} Task took {}ms", "Cache hit".green(), total_ms);
+                    let cache_hit_str = if cache_hit_ms >= 1000 { format!("{:.1}s", cache_hit_ms as f64 / 1000.0) } else { format!("{}ms", cache_hit_ms) };
+                    info!("{} Task took {}", "Result restored from cache".green(), cache_hit_str);
                 }
                 return Ok(());
             }
@@ -113,9 +125,12 @@ pub async fn execute(
     }
     
     // Execute the task with live output for non-cached runs
+    let command_start = std::time::Instant::now();
     let result = executor.execute_with_live_output(&task, args, &working_dir).await?;
+    let command_duration = command_start.elapsed();
     
     // Store in cache if enabled and not disabled
+    let cache_start = std::time::Instant::now();
     if task.cache && !no_cache {
         let cache_key = compute_cache_key(&task, &config, args, &executor, &working_dir).await?;
         
@@ -125,8 +140,8 @@ pub async fn execute(
         let _entry_id = cache_manager.store_task_outputs(
             &cache_key,
             result.exit_code,
-            Some(result.stdout.as_bytes()),
-            Some(result.stderr.as_bytes()),
+            Some(&result.stdout),
+            Some(&result.stderr),
             &output_files,
             result.duration_ms, // Store the actual execution time
         ).await?;
@@ -135,10 +150,17 @@ pub async fn execute(
     } else if no_cache {
         debug!("Cache storage disabled due to --no-cache flag");
     }
+    let cache_duration = cache_start.elapsed();
     
-    let total_time = start_time.elapsed();
-    let total_ms = total_time.as_millis() as u64;
-    info!("No cache hit. Task took {}ms", total_ms);
+    // Calculate total time (from start of function to here)
+    let total_duration = start_time.elapsed();
+    
+    // Format timing strings
+    let total_str = if total_duration.as_millis() >= 1000 { format!("{:.1}s", total_duration.as_millis() as f64 / 1000.0) } else { format!("{}ms", total_duration.as_millis()) };
+    let command_str = if command_duration.as_millis() >= 1000 { format!("{:.1}s", command_duration.as_millis() as f64 / 1000.0) } else { format!("{}ms", command_duration.as_millis()) };
+    let cache_str = if cache_duration.as_millis() >= 1000 { format!("{:.1}s", cache_duration.as_millis() as f64 / 1000.0) } else { format!("{}ms", cache_duration.as_millis()) };
+    
+    info!("No cache hit. Total: {}, Command: {}, Cache: {}", total_str, command_str, cache_str);
     Ok(())
 }
 
@@ -190,7 +212,7 @@ async fn execute_task(task: &TaskDefinition, args: &[String]) -> Result<TaskResu
 #[derive(Debug)]
 struct TaskResult {
     exit_code: i32,
-    stdout: String,
-    stderr: String,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
     duration_ms: i64,
 }

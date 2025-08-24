@@ -14,8 +14,54 @@ impl ContentAddressableStore {
         Self { root }
     }
     
+    /// Helper function to safely write files with race condition handling
+    async fn safe_write_file(&self, target_path: &Path, content: &[u8]) -> Result<()> {
+        debug!("safe_write_file: Creating file at {}", target_path.display());
+        
+        // Always try to remove the target first, regardless of whether it exists
+        // This ensures we can overwrite any existing file or directory
+        let _ = tokio_fs::remove_file(target_path).await;
+        let _ = tokio_fs::remove_dir_all(target_path).await;
+        
+        // Ensure parent directory exists
+        if let Some(parent) = target_path.parent() {
+            debug!("safe_write_file: Creating parent directory {}", parent.display());
+            tokio_fs::create_dir_all(parent).await?;
+        }
+        
+        // Write file content - this should always succeed now
+        tokio_fs::write(target_path, content).await?;
+        debug!("safe_write_file: Successfully wrote file {}", target_path.display());
+        
+        Ok(())
+    }
+    
+    /// Helper function to safely create symlinks with race condition handling
+    async fn safe_create_symlink(&self, target_path: &Path, link_target: &str) -> Result<()> {
+        debug!("safe_create_symlink: Creating symlink at {} -> {}", target_path.display(), link_target);
+        
+        // Always try to remove the target first, regardless of whether it exists
+        // This ensures we can overwrite any existing file or directory
+        let _ = tokio_fs::remove_file(target_path).await;
+        let _ = tokio_fs::remove_dir_all(target_path).await;
+        
+        // Ensure parent directory exists
+        if let Some(parent) = target_path.parent() {
+            debug!("safe_create_symlink: Creating parent directory {}", parent.display());
+            tokio_fs::create_dir_all(parent).await?;
+        }
+        
+        // Create symlink - this should always succeed now
+        tokio_fs::symlink(link_target, target_path).await?;
+        debug!("safe_create_symlink: Successfully created symlink {}", target_path.display());
+        
+        Ok(())
+    }
+    
     /// Store a file in the CAS and return its hash
     pub async fn store_file(&self, file_path: &Path) -> Result<String> {
+        debug!("store_file: Storing file {}", file_path.display());
+        
         // Check if it's a symlink
         let metadata = tokio_fs::symlink_metadata(file_path).await?;
         
@@ -74,8 +120,30 @@ impl ContentAddressableStore {
         Ok(hash)
     }
     
+    /// Retrieve a file from the CAS by hash (assumes directory already exists)
+    pub async fn get_file_without_dir_creation(&self, hash: &str, target_path: &Path) -> Result<()> {
+        debug!("get_file_without_dir_creation: Retrieving file {} to {}", hash, target_path.display());
+        
+        let cas_path = self.get_cas_path_optimized(hash);
+        
+        if !cas_path.exists() {
+            return Err(cue_common::CueError::Cache(format!("Blob not found: {}", hash)));
+        }
+        
+        // Read content from CAS
+        let content = tokio_fs::read(&cas_path).await?;
+        
+        // Process content based on type
+        self.process_cas_content(&content, target_path).await?;
+        
+        debug!("Retrieved file {} to {}", hash, target_path.display());
+        Ok(())
+    }
+    
     /// Retrieve a file from the CAS by hash
     pub async fn get_file(&self, hash: &str, target_path: &Path) -> Result<()> {
+        debug!("get_file: Retrieving file {} to {}", hash, target_path.display());
+        
         let cas_path = self.get_cas_path(hash);
         
         if !cas_path.exists() {
@@ -84,14 +152,23 @@ impl ContentAddressableStore {
         
         // Create target directory if it doesn't exist
         if let Some(parent) = target_path.parent() {
+            debug!("get_file: Creating parent directory {}", parent.display());
             tokio_fs::create_dir_all(parent).await?;
         }
         
         // Read content from CAS
         let content = tokio_fs::read(&cas_path).await?;
         
+        // Process content based on type
+        self.process_cas_content(&content, target_path).await?;
+        
+        Ok(())
+    }
+    
+    /// Process CAS content and write to target path (extracted from get_file for reuse)
+    async fn process_cas_content(&self, content: &[u8], target_path: &Path) -> Result<()> {
         // Check if this is a symlink
-        if let Ok(content_str) = std::str::from_utf8(&content) {
+        if let Ok(content_str) = std::str::from_utf8(content) {
             if let Some(symlink_data) = content_str.strip_prefix("SYMLINK:") {
                 // Parse symlink target and mode
                 let parts: Vec<&str> = symlink_data.splitn(2, ':').collect();
@@ -102,52 +179,40 @@ impl ContentAddressableStore {
                     // Create symlink
                     #[cfg(unix)]
                     {
-                        // Remove target if it exists
-                        if target_path.exists() {
-                            if tokio_fs::remove_file(target_path).await.is_err() {
-                                let _ = tokio_fs::remove_dir_all(target_path).await;
-                            }
-                        }
-                        tokio_fs::symlink(link_target, target_path).await?;
+                        self.safe_create_symlink(target_path, link_target).await?;
                         
-                        // Skip setting permissions on symlinks for now - this may be causing issues
-                        // if let Ok(mode) = u32::from_str_radix(mode_str, 8) {
-                        //     self.set_file_mode(target_path, mode).await?;
-                        // }
+                        // Set permissions on the symlink itself
+                        if let Ok(mode) = u32::from_str_radix(mode_str, 8) {
+                            self.set_file_mode(target_path, mode).await?;
+                        }
                     }
                     #[cfg(windows)]
                     {
                         // On Windows, we'll create a regular file with the content for compatibility
                         let link_target_path = target_path.parent().unwrap().join(link_target);
                         if link_target_path.exists() {
-                            tokio_fs::copy(&link_target_path, target_path).await?;
+                            self.safe_write_file(target_path, &tokio_fs::read(&link_target_path).await?).await?;
                         } else {
-                            tokio_fs::write(target_path, content).await?;
+                            self.safe_write_file(target_path, content).await?;
                         }
                     }
-                    debug!("Retrieved symlink {} -> {} to {}", hash, link_target, target_path.display());
+                    debug!("Retrieved symlink {} -> {}", link_target, target_path.display());
                 } else {
                     // Fallback for old format without permissions
                     #[cfg(unix)]
                     {
-                        // Remove target if it exists
-                        if target_path.exists() {
-                            if tokio_fs::remove_file(target_path).await.is_err() {
-                                let _ = tokio_fs::remove_dir_all(target_path).await;
-                            }
-                        }
-                        tokio_fs::symlink(symlink_data, target_path).await?;
+                        self.safe_create_symlink(target_path, symlink_data).await?;
                     }
                     #[cfg(windows)]
                     {
                         let link_target_path = target_path.parent().unwrap().join(symlink_data);
                         if link_target_path.exists() {
-                            tokio_fs::copy(&link_target_path, target_path).await?;
+                            self.safe_write_file(target_path, &tokio_fs::read(&link_target_path).await?).await?;
                         } else {
-                            tokio_fs::write(target_path, content).await?;
+                            self.safe_write_file(target_path, content).await?;
                         }
                     }
-                    debug!("Retrieved symlink {} -> {} to {}", hash, symlink_data, target_path.display());
+                    debug!("Retrieved symlink {} -> {}", symlink_data, target_path.display());
                 }
             } else if let Some(mode_data) = content_str.strip_prefix("MODE:") {
                 // Parse mode and content for regular files
@@ -156,41 +221,24 @@ impl ContentAddressableStore {
                     let mode_str = parts[0];
                     let file_content = &content[format!("MODE:{}:", mode_str).len()..];
                     
-                    // Remove target if it exists
-                    if target_path.exists() {
-                        if tokio_fs::remove_file(target_path).await.is_err() {
-                                let _ = tokio_fs::remove_dir_all(target_path).await;
-                            }
-                    }
-                    
-                    // Write file content
-                    tokio_fs::write(target_path, file_content).await?;
+                    // Write file content safely
+                    self.safe_write_file(target_path, file_content).await?;
                     
                     // Set permissions
                     if let Ok(mode) = u32::from_str_radix(mode_str, 8) {
                         self.set_file_mode(target_path, mode).await?;
                     }
                     
-                    debug!("Retrieved blob {} to {} ({} bytes, mode {:o})", hash, target_path.display(), file_content.len(), u32::from_str_radix(mode_str, 8).unwrap_or(0));
+                    debug!("Retrieved file to {} ({} bytes, mode {:o})", target_path.display(), file_content.len(), u32::from_str_radix(mode_str, 8).unwrap_or(0));
                 } else {
                     // Fallback for malformed mode data
-                    if target_path.exists() {
-                        if tokio_fs::remove_file(target_path).await.is_err() {
-                                let _ = tokio_fs::remove_dir_all(target_path).await;
-                            }
-                    }
-                    tokio_fs::write(target_path, &content).await?;
-                    debug!("Retrieved blob {} to {} ({} bytes)", hash, target_path.display(), content.len());
+                    self.safe_write_file(target_path, content).await?;
+                    debug!("Retrieved file to {} ({} bytes)", target_path.display(), content.len());
                 }
             } else {
                 // Regular file without mode prefix (old format)
-                if target_path.exists() {
-                    if tokio_fs::remove_file(target_path).await.is_err() {
-                                let _ = tokio_fs::remove_dir_all(target_path).await;
-                            }
-                }
-                tokio_fs::write(target_path, &content).await?;
-                debug!("Retrieved blob {} to {} ({} bytes)", hash, target_path.display(), content.len());
+                self.safe_write_file(target_path, content).await?;
+                debug!("Retrieved file to {} ({} bytes)", target_path.display(), content.len());
             }
         } else {
             // Binary file - check if it has mode prefix
@@ -201,14 +249,9 @@ impl ContentAddressableStore {
                     if let Ok(mode_str) = std::str::from_utf8(&content[5..mode_end]) {
                         if let Ok(mode) = u32::from_str_radix(mode_str, 8) {
                             let file_content = &content[mode_end + 1..];
-                            if target_path.exists() {
-                                if tokio_fs::remove_file(target_path).await.is_err() {
-                                let _ = tokio_fs::remove_dir_all(target_path).await;
-                            }
-                            }
-                            tokio_fs::write(target_path, file_content).await?;
+                            self.safe_write_file(target_path, file_content).await?;
                             self.set_file_mode(target_path, mode).await?;
-                            debug!("Retrieved binary blob {} to {} ({} bytes, mode {:o})", hash, target_path.display(), file_content.len(), mode);
+                            debug!("Retrieved binary file to {} ({} bytes, mode {:o})", target_path.display(), file_content.len(), mode);
                             return Ok(());
                         }
                     }
@@ -216,13 +259,8 @@ impl ContentAddressableStore {
             }
             
             // Fallback: binary file without mode
-            if target_path.exists() {
-                if tokio_fs::remove_file(target_path).await.is_err() {
-                                let _ = tokio_fs::remove_dir_all(target_path).await;
-                            }
-            }
-            tokio_fs::write(target_path, &content).await?;
-            debug!("Retrieved blob {} to {} ({} bytes)", hash, target_path.display(), content.len());
+            self.safe_write_file(target_path, content).await?;
+            debug!("Retrieved binary file to {} ({} bytes)", target_path.display(), content.len());
         }
         
         Ok(())
@@ -280,7 +318,18 @@ impl ContentAddressableStore {
             
             while let Some(entry) = entries.next_entry().await? {
                 let path = entry.path();
-                if path.is_file() {
+                if path.is_dir() {
+                    // Recursively traverse subdirectories (3-char prefixes)
+                    let mut sub_entries = tokio_fs::read_dir(&path).await?;
+                    while let Some(sub_entry) = sub_entries.next_entry().await? {
+                        let sub_path = sub_entry.path();
+                        if sub_path.is_file() {
+                            let metadata = tokio_fs::metadata(&sub_path).await?;
+                            total_size += metadata.len();
+                        }
+                    }
+                } else if path.is_file() {
+                    // Handle files directly in root (fallback for old format)
                     let metadata = tokio_fs::metadata(&path).await?;
                     total_size += metadata.len();
                 }
@@ -306,6 +355,19 @@ impl ContentAddressableStore {
         let prefix = &hash[..3];
         let suffix = &hash[3..];
         self.root.join(prefix).join(suffix)
+    }
+    
+    /// Get the CAS path for a given hash (optimized for repeated calls)
+    fn get_cas_path_optimized(&self, hash: &str) -> PathBuf {
+        if hash.len() < 3 {
+            return self.root.join(hash);
+        }
+        
+        // Use a more efficient path construction
+        let mut path = self.root.clone();
+        path.push(&hash[..3]);
+        path.push(&hash[3..]);
+        path
     }
     
     /// Get file mode (permissions) from std::fs::Permissions

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use tracing::debug;
 use uuid::Uuid;
 use chrono::Utc;
+use crate::cache::cas;
 
 #[derive(Clone)]
 pub struct CacheDatabase {
@@ -164,7 +165,7 @@ impl CacheDatabase {
     }
     
     /// Store output mappings for an action
-    pub async fn store_outputs(&self, action_id: &Uuid, outputs: &[(String, String)]) -> Result<()> {
+    pub async fn store_outputs(&self, action_id: &Uuid, outputs: &[(String, String)], cas: &cas::ContentAddressableStore) -> Result<()> {
         let mut transaction = self.pool.begin().await?;
         
         for (blob_hash, relative_path) in outputs {
@@ -181,17 +182,21 @@ impl CacheDatabase {
             .execute(&mut *transaction)
             .await?;
             
+            // Get blob size from CAS
+            let blob_size = cas.get_blob_size(blob_hash).await.unwrap_or(0);
+            
             // Increment blob reference count
             sqlx::query(
                 r#"
                 INSERT INTO blobs (hash, size, ref_count, last_access)
-                VALUES (?, 0, 1, ?)
+                VALUES (?, ?, 1, ?)
                 ON CONFLICT(hash) DO UPDATE SET
                     ref_count = ref_count + 1,
                     last_access = ?
                 "#
             )
             .bind(blob_hash)
+            .bind(blob_size as i64)
             .bind(Utc::now().to_rfc3339())
             .bind(Utc::now().to_rfc3339())
             .execute(&mut *transaction)

@@ -47,6 +47,7 @@ impl CacheManager {
             // Convert outputs to HashMap
             let mut output_map = std::collections::HashMap::new();
             for output in outputs {
+                debug!("get: Found output: relative_path='{}', blob_hash='{}'", output.relative_path, output.blob_hash);
                 output_map.insert(output.relative_path, output.blob_hash);
             }
             
@@ -99,28 +100,65 @@ impl CacheManager {
             .collect();
         
         // Store output mappings
-        self.db.store_outputs(&entry.id, &outputs).await?;
+        self.db.store_outputs(&entry.id, &outputs, &self.cas).await?;
         
         debug!("Stored cache entry {} with {} outputs", entry.id, outputs.len());
         Ok(())
+    }
+    
+    /// Get stdout content from cache entry
+    pub async fn get_stdout(&self, entry: &CacheEntry) -> Result<Option<String>> {
+        if let Some(stdout_hash) = &entry.metadata.stdout_hash {
+            let content = self.cas.get_content(stdout_hash).await?;
+            Ok(Some(String::from_utf8_lossy(&content).to_string()))
+        } else {
+            Ok(None)
+        }
+    }
+    
+    /// Get stderr content from cache entry
+    pub async fn get_stderr(&self, entry: &CacheEntry) -> Result<Option<String>> {
+        if let Some(stderr_hash) = &entry.metadata.stderr_hash {
+            let content = self.cas.get_content(stderr_hash).await?;
+            Ok(Some(String::from_utf8_lossy(&content).to_string()))
+        } else {
+            Ok(None)
+        }
     }
     
     /// Materialize cache entry outputs to the filesystem
     pub async fn materialize_outputs(&self, entry: &CacheEntry, base_path: &PathBuf) -> Result<()> {
         use futures::stream::{FuturesUnordered, StreamExt};
         
+        // Pre-create all needed directories to reduce I/O overhead
+        let mut directories = std::collections::HashSet::new();
+        for (relative_path, _) in &entry.outputs {
+            let target_path = base_path.join(relative_path);
+            if let Some(parent) = target_path.parent() {
+                directories.insert(parent.to_path_buf());
+            }
+        }
+        
+        // Create all directories in parallel
+        let dir_futures: Vec<_> = directories.into_iter().map(|dir| {
+            tokio::fs::create_dir_all(dir)
+        }).collect();
+        futures::future::join_all(dir_futures).await;
+        
         // Create a stream of futures for parallel execution
         let mut futures = FuturesUnordered::new();
         
         for (relative_path, blob_hash) in &entry.outputs {
+            debug!("materialize_outputs: Processing relative_path: '{}'", relative_path);
             let target_path = base_path.join(relative_path);
+            debug!("materialize_outputs: Target path: {}", target_path.display());
             let cas = self.cas.clone();
             let blob_hash = blob_hash.clone();
             let _relative_path = relative_path.clone();
             
             futures.push(async move {
-                // Retrieve file from CAS
-                if let Err(e) = cas.get_file(&blob_hash, &target_path).await {
+                // Retrieve file from CAS (directory already created)
+                if let Err(e) = cas.get_file_without_dir_creation(&blob_hash, &target_path).await {
                     return Err(cue_common::CueError::Cache(format!(
                         "Failed to materialize file '{}' (hash: {}): {}", 
                         target_path.display(), 
@@ -133,11 +171,27 @@ impl CacheManager {
             });
         }
         
-        // Process all futures concurrently, but limit concurrency to avoid overwhelming the system
+        // Process all futures concurrently with optimized batch processing
         let mut count = 0;
+        let mut buffer = Vec::new();
+        
+        // Process in larger batches for better throughput and reduce context switching
         while let Some(result) = futures.next().await {
-            result?; // Propagate any errors
+            buffer.push(result);
             count += 1;
+            
+            // Process batch when we have enough results or when stream is done
+            // Increased batch size for better performance
+            if buffer.len() >= 100 || futures.is_empty() {
+                for result in buffer.drain(..) {
+                    result?; // Propagate any errors
+                }
+            }
+        }
+        
+        // Process any remaining results
+        for result in buffer {
+            result?;
         }
         
         debug!("Materialized {} outputs for cache entry {}", count, entry.id);
