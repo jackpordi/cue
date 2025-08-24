@@ -1,7 +1,7 @@
 use cue_common::{Result, ActionInfo, BlobInfo, OutputMapping};
 use sqlx::{sqlite::SqlitePool, Row};
 use std::path::PathBuf;
-use tracing::{debug, warn};
+use tracing::debug;
 use uuid::Uuid;
 use chrono::Utc;
 

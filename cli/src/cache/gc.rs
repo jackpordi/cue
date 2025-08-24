@@ -1,6 +1,6 @@
 use cue_common::Result;
 use crate::cache::{cas::ContentAddressableStore, database::CacheDatabase};
-use tracing::{info, warn, debug};
+use tracing::{info, debug};
 use chrono::{Duration, Utc};
 use bytesize::ByteSize;
 

@@ -5,10 +5,9 @@ use cue_common::{Result, TaskDefinition};
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::Command;
-use tokio::time::{Instant, Duration};
+use tokio::time::Instant;
 use tracing::{info, debug, warn};
 use glob::glob;
-use walkdir::WalkDir;
 
 pub struct TaskExecutor;
 

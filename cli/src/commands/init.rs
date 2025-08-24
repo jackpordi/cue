@@ -1,6 +1,5 @@
 use cue_common::Result;
 use tracing::info;
-use std::path::PathBuf;
 use crate::config::{create_default_workspace_config, create_default_project_config};
 use clap::ValueEnum;
 

@@ -1,6 +1,5 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use cue_common::Result;
-use tracing::info;
 
 mod commands;
 mod cache;

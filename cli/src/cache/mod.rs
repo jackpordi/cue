@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use tracing::{info, debug};
 use uuid::Uuid;
 use chrono::Utc;
-use serde_json;
 
 pub struct CacheManager {
     pub cas: cas::ContentAddressableStore,

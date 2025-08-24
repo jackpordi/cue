@@ -1,5 +1,5 @@
 use cue_common::{Result, TaskDefinition, WorkspaceConfig, CacheKey};
-use tracing::{info, warn, debug};
+use tracing::{info, debug};
 use owo_colors::OwoColorize;
 use std::path::PathBuf;
 use crate::cache::CacheManager;

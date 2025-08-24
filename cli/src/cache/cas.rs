@@ -1,9 +1,8 @@
 use cue_common::Result;
 use sha2::{Sha256, Digest};
 use std::path::{Path, PathBuf};
-use std::fs;
 use tokio::fs as tokio_fs;
-use tracing::{debug, warn};
+use tracing::debug;
 
 #[derive(Clone)]
 pub struct ContentAddressableStore {
