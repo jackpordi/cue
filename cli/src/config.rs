@@ -261,22 +261,10 @@ impl ConfigManager {
         })
     }
     
-    /// Get cache configuration
-    pub async fn get_cache_config(&mut self) -> Result<Option<&CacheConfig>> {
-        let workspace_config = self.load_workspace_config().await?;
-        Ok(workspace_config.cache.as_ref())
-    }
-    
     /// Find a specific task by name (supports project:task format)
     pub async fn find_task(&mut self, task_name: &str) -> Result<Option<TaskDefinition>> {
         let merged_config = self.get_merged_config().await?;
         Ok(merged_config.tasks.get(task_name).cloned())
-    }
-    
-    /// List all available tasks
-    pub async fn list_tasks(&mut self) -> Result<Vec<String>> {
-        let merged_config = self.get_merged_config().await?;
-        Ok(merged_config.tasks.keys().cloned().collect())
     }
 }
 

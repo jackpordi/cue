@@ -11,7 +11,6 @@ use chrono::Utc;
 pub struct CacheManager {
     pub cas: cas::ContentAddressableStore,
     pub db: database::CacheDatabase,
-    cache_dir: PathBuf,
 }
 
 impl CacheManager {
@@ -29,7 +28,6 @@ impl CacheManager {
         Ok(Self {
             cas,
             db,
-            cache_dir,
         })
     }
     
@@ -106,25 +104,7 @@ impl CacheManager {
         Ok(())
     }
     
-    /// Get stdout content from cache entry
-    pub async fn get_stdout(&self, entry: &CacheEntry) -> Result<Option<String>> {
-        if let Some(stdout_hash) = &entry.metadata.stdout_hash {
-            let content = self.cas.get_content(stdout_hash).await?;
-            Ok(Some(String::from_utf8_lossy(&content).to_string()))
-        } else {
-            Ok(None)
-        }
-    }
-    
-    /// Get stderr content from cache entry
-    pub async fn get_stderr(&self, entry: &CacheEntry) -> Result<Option<String>> {
-        if let Some(stderr_hash) = &entry.metadata.stderr_hash {
-            let content = self.cas.get_content(stderr_hash).await?;
-            Ok(Some(String::from_utf8_lossy(&content).to_string()))
-        } else {
-            Ok(None)
-        }
-    }
+
     
     /// Materialize cache entry outputs to the filesystem
     pub async fn materialize_outputs(&self, entry: &CacheEntry, base_path: &PathBuf) -> Result<()> {

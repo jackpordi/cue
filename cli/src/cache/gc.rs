@@ -116,14 +116,6 @@ impl GarbageCollector {
             // Get outputs before deleting the action
             let outputs = self.db.get_outputs(&action.id).await?;
             
-            // Calculate size of this action's outputs
-            let mut action_size = 0u64;
-            for output in &outputs {
-                if let Ok(size) = self.cas.get_blob_size(&output.blob_hash).await {
-                    action_size += size;
-                }
-            }
-            
             // Delete the action (this will decrement ref counts)
             self.db.delete_action(&action.id).await?;
             stats.actions_deleted += 1;

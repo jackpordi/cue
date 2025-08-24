@@ -133,6 +133,12 @@ impl ContentAddressableStore {
         // Read content from CAS
         let content = tokio_fs::read(&cas_path).await?;
         
+        // Check if file already exists with correct content and permissions
+        if self.file_matches_expected(&content, target_path).await? {
+            debug!("File {} already exists with correct content and permissions, skipping", target_path.display());
+            return Ok(());
+        }
+        
         // Process content based on type
         self.process_cas_content(&content, target_path).await?;
         
@@ -140,29 +146,151 @@ impl ContentAddressableStore {
         Ok(())
     }
     
-    /// Retrieve a file from the CAS by hash
-    pub async fn get_file(&self, hash: &str, target_path: &Path) -> Result<()> {
-        debug!("get_file: Retrieving file {} to {}", hash, target_path.display());
-        
-        let cas_path = self.get_cas_path(hash);
-        
-        if !cas_path.exists() {
-            return Err(cue_common::CueError::Cache(format!("Blob not found: {}", hash)));
+
+    
+    /// Check if a file already exists with the expected content and permissions
+    async fn file_matches_expected(&self, expected_content: &[u8], target_path: &Path) -> Result<bool> {
+        // If target doesn't exist, it doesn't match
+        if !target_path.exists() {
+            return Ok(false);
         }
         
-        // Create target directory if it doesn't exist
-        if let Some(parent) = target_path.parent() {
-            debug!("get_file: Creating parent directory {}", parent.display());
-            tokio_fs::create_dir_all(parent).await?;
+        // Check if this is a symlink
+        if let Ok(content_str) = std::str::from_utf8(expected_content) {
+            if let Some(symlink_data) = content_str.strip_prefix("SYMLINK:") {
+                // Parse symlink target and mode
+                let parts: Vec<&str> = symlink_data.splitn(2, ':').collect();
+                if parts.len() == 2 {
+                    let expected_target = parts[0];
+                    let expected_mode_str = parts[1];
+                    
+                    // Check if it's a symlink
+                    if let Ok(metadata) = target_path.symlink_metadata() {
+                        if metadata.file_type().is_symlink() {
+                            // Check symlink target
+                            if let Ok(actual_target) = std::fs::read_link(target_path) {
+                                if actual_target.to_string_lossy() == expected_target {
+                                    // Check permissions
+                                    if let Ok(expected_mode) = u32::from_str_radix(expected_mode_str, 8) {
+                                        #[cfg(unix)]
+                                        {
+                                            use std::os::unix::fs::PermissionsExt;
+                                            let actual_mode = metadata.permissions().mode();
+                                            return Ok(actual_mode == expected_mode);
+                                        }
+                                        #[cfg(not(unix))]
+                                        {
+                                            return Ok(true); // Skip permission check on non-Unix
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Fallback for old format without permissions
+                    if let Ok(metadata) = target_path.symlink_metadata() {
+                        if metadata.file_type().is_symlink() {
+                            if let Ok(actual_target) = std::fs::read_link(target_path) {
+                                return Ok(actual_target.to_string_lossy() == symlink_data);
+                            }
+                        }
+                    }
+                }
+            } else if let Some(mode_data) = content_str.strip_prefix("MODE:") {
+                // Parse mode and content for regular files
+                let parts: Vec<&str> = mode_data.splitn(2, ':').collect();
+                if parts.len() == 2 {
+                    let expected_mode_str = parts[0];
+                    let expected_file_content = &expected_content[format!("MODE:{}:", expected_mode_str).len()..];
+                    
+                    // Check if it's a regular file
+                    if let Ok(metadata) = target_path.metadata() {
+                        if metadata.is_file() {
+                            // Check file content
+                            if let Ok(actual_content) = tokio_fs::read(target_path).await {
+                                if actual_content == expected_file_content {
+                                    // Check permissions
+                                    if let Ok(expected_mode) = u32::from_str_radix(expected_mode_str, 8) {
+                                        #[cfg(unix)]
+                                        {
+                                            use std::os::unix::fs::PermissionsExt;
+                                            let actual_mode = metadata.permissions().mode();
+                                            return Ok(actual_mode == expected_mode);
+                                        }
+                                        #[cfg(not(unix))]
+                                        {
+                                            return Ok(true); // Skip permission check on non-Unix
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Fallback for malformed mode data
+                    if let Ok(metadata) = target_path.metadata() {
+                        if metadata.is_file() {
+                            if let Ok(actual_content) = tokio_fs::read(target_path).await {
+                                return Ok(actual_content == expected_content);
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Regular file without mode prefix (old format)
+                if let Ok(metadata) = target_path.metadata() {
+                    if metadata.is_file() {
+                        if let Ok(actual_content) = tokio_fs::read(target_path).await {
+                            return Ok(actual_content == expected_content);
+                        }
+                    }
+                }
+            }
+        } else {
+            // Binary file - check if it has mode prefix
+            if expected_content.len() > 5 && expected_content.starts_with(b"MODE:") {
+                // Try to parse as binary file with mode
+                if let Some(colon_pos) = expected_content[5..].iter().position(|&b| b == b':') {
+                    let mode_end = 5 + colon_pos;
+                    if let Ok(mode_str) = std::str::from_utf8(&expected_content[5..mode_end]) {
+                        if let Ok(expected_mode) = u32::from_str_radix(mode_str, 8) {
+                            let expected_file_content = &expected_content[mode_end + 1..];
+                            
+                            if let Ok(metadata) = target_path.metadata() {
+                                if metadata.is_file() {
+                                    if let Ok(actual_content) = tokio_fs::read(target_path).await {
+                                        if actual_content == expected_file_content {
+                                            #[cfg(unix)]
+                                            {
+                                                use std::os::unix::fs::PermissionsExt;
+                                                let actual_mode = metadata.permissions().mode();
+                                                return Ok(actual_mode == expected_mode);
+                                            }
+                                            #[cfg(not(unix))]
+                                            {
+                                                return Ok(true); // Skip permission check on non-Unix
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Fallback: binary file without mode
+            if let Ok(metadata) = target_path.metadata() {
+                if metadata.is_file() {
+                    if let Ok(actual_content) = tokio_fs::read(target_path).await {
+                        return Ok(actual_content == expected_content);
+                    }
+                }
+            }
         }
         
-        // Read content from CAS
-        let content = tokio_fs::read(&cas_path).await?;
-        
-        // Process content based on type
-        self.process_cas_content(&content, target_path).await?;
-        
-        Ok(())
+        Ok(false)
     }
     
     /// Process CAS content and write to target path (extracted from get_file for reuse)
@@ -292,10 +420,7 @@ impl ContentAddressableStore {
         Ok(())
     }
     
-    /// Check if a blob exists in the CAS
-    pub fn blob_exists(&self, hash: &str) -> bool {
-        self.get_cas_path(hash).exists()
-    }
+
     
     /// Get the size of a blob
     pub async fn get_blob_size(&self, hash: &str) -> Result<u64> {

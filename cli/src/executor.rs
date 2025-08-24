@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::Command;
 use tokio::time::Instant;
-use tracing::{info, debug, warn};
+use tracing::{debug, warn};
 use glob::glob;
 
 pub struct TaskExecutor;
@@ -16,12 +16,14 @@ impl TaskExecutor {
         Self
     }
     
-    pub async fn execute(&self, task: &TaskDefinition, args: &[String], working_dir: &PathBuf) -> Result<TaskExecutionResult> {
-        self.execute_with_options(task, args, working_dir, false).await
-    }
+
     
     pub async fn execute_with_live_output(&self, task: &TaskDefinition, args: &[String], working_dir: &PathBuf) -> Result<TaskExecutionResult> {
         self.execute_with_options(task, args, working_dir, true).await
+    }
+    
+    pub async fn execute_silent(&self, task: &TaskDefinition, args: &[String], working_dir: &PathBuf) -> Result<TaskExecutionResult> {
+        self.execute_with_options(task, args, working_dir, false).await
     }
     
     async fn execute_with_options(&self, task: &TaskDefinition, args: &[String], working_dir: &PathBuf, live_output: bool) -> Result<TaskExecutionResult> {

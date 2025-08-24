@@ -24,3 +24,11 @@ outputs = ["target/"]
 dependencies = []
 cache = true
 description = "Build the project"
+
+[tasks.slow]
+command = "sleep 2"
+inputs = []
+outputs = []
+dependencies = []
+cache = false
+description = "A slow task for testing"

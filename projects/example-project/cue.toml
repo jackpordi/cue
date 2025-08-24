@@ -24,3 +24,11 @@ outputs = []
 dependencies = ["build"]
 cache = true
 description = "Run tests"
+
+[tasks.slow]
+command = "sleep 3"
+inputs = []
+outputs = []
+dependencies = []
+cache = false
+description = "A slow task for testing"

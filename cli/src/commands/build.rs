@@ -1,7 +1,7 @@
 use cue_common::Result;
 use tracing::info;
 
-pub async fn execute(target: &str, remote_cache: Option<String>) -> Result<()> {
+pub async fn execute(target: &str, _remote_cache: Option<String>) -> Result<()> {
     info!("Building target: {}", target);
     
     // TODO: Implement build logic
