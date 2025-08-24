@@ -1,5 +1,6 @@
 use cue_common::{Result, TaskDefinition, WorkspaceConfig, CacheKey};
 use tracing::{info, warn, debug};
+use owo_colors::OwoColorize;
 use std::path::PathBuf;
 use crate::cache::CacheManager;
 use crate::config::ConfigManager;
@@ -94,12 +95,13 @@ pub async fn execute(
                 
                 let total_time = start_time.elapsed();
                 let total_ms = total_time.as_millis() as u64;
-                let saved_ms = cache_entry.metadata.duration_ms;
+                let saved_ms = cache_entry.metadata.duration_ms as u64;
                 
                 if saved_ms > 0 {
-                    info!("Cache hit. Task took {}ms, cache prevented {}ms", total_ms, saved_ms);
+                    // Show how much time was saved compared to the original execution
+                    info!("{} Task took {}ms (would have taken {}ms)", "Cache hit".green(), total_ms, saved_ms);
                 } else {
-                    info!("Cache hit. Task took {}ms", total_ms);
+                    info!("{} Task took {}ms", "Cache hit".green(), total_ms);
                 }
                 return Ok(());
             }
@@ -110,8 +112,8 @@ pub async fn execute(
         debug!("Cache disabled due to --no-cache flag, executing task");
     }
     
-    // Execute the task
-    let result = executor.execute(&task, args, &working_dir).await?;
+    // Execute the task with live output for non-cached runs
+    let result = executor.execute_with_live_output(&task, args, &working_dir).await?;
     
     // Store in cache if enabled and not disabled
     if task.cache && !no_cache {

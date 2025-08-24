@@ -18,6 +18,14 @@ impl TaskExecutor {
     }
     
     pub async fn execute(&self, task: &TaskDefinition, args: &[String], working_dir: &PathBuf) -> Result<TaskExecutionResult> {
+        self.execute_with_options(task, args, working_dir, false).await
+    }
+    
+    pub async fn execute_with_live_output(&self, task: &TaskDefinition, args: &[String], working_dir: &PathBuf) -> Result<TaskExecutionResult> {
+        self.execute_with_options(task, args, working_dir, true).await
+    }
+    
+    async fn execute_with_options(&self, task: &TaskDefinition, args: &[String], working_dir: &PathBuf, live_output: bool) -> Result<TaskExecutionResult> {
         let start_time = Instant::now();
         
         debug!("Executing task: {} with args: {:?} in {}", task.command, args, working_dir.display());
@@ -26,9 +34,16 @@ impl TaskExecutor {
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
            .arg(&task.command)
-           .current_dir(working_dir)
-           .stdout(Stdio::piped())
-           .stderr(Stdio::piped());
+           .current_dir(working_dir);
+        
+        // Configure stdio based on live_output flag
+        if live_output {
+            cmd.stdout(Stdio::inherit())
+               .stderr(Stdio::inherit());
+        } else {
+            cmd.stdout(Stdio::piped())
+               .stderr(Stdio::piped());
+        }
         
         // Add any additional arguments
         if !args.is_empty() {
@@ -37,18 +52,30 @@ impl TaskExecutor {
         
         debug!("Running command: {:?}", cmd);
         
-        // Execute the command
-        let output = cmd.output().await.map_err(|e| {
-            cue_common::CueError::Execution(format!("Failed to execute command: {}", e))
-        })?;
+        // Execute the command based on live_output mode
+        let (output, stdout, stderr, final_exit_code) = if live_output {
+            let status = cmd.status().await.map_err(|e| {
+                cue_common::CueError::Execution(format!("Failed to execute command: {}", e))
+            })?;
+            
+            // For live output, we don't capture stdout/stderr
+            let exit_code = status.code().unwrap_or(-1);
+            (None, String::new(), String::new(), exit_code)
+        } else {
+            let output = cmd.output().await.map_err(|e| {
+                cue_common::CueError::Execution(format!("Failed to execute command: {}", e))
+            })?;
+            
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let exit_code = output.status.code().unwrap_or(-1);
+            (Some(output), stdout, stderr, exit_code)
+        };
         
         let duration = start_time.elapsed();
         let duration_ms = duration.as_millis() as u64;
         
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        
-        info!("Task completed with exit code: {} (took {}ms)", output.status.code().unwrap_or(-1), duration_ms);
+        info!("Task completed with exit code: {} (took {}ms)", final_exit_code, duration_ms);
         
         if !stdout.is_empty() {
             debug!("STDOUT: {}", stdout);
@@ -59,7 +86,7 @@ impl TaskExecutor {
         }
         
         Ok(TaskExecutionResult {
-            exit_code: output.status.code().unwrap_or(-1),
+            exit_code: final_exit_code,
             stdout,
             stderr,
             duration_ms: duration_ms as i64,

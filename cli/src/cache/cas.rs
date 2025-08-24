@@ -111,10 +111,10 @@ impl ContentAddressableStore {
                         }
                         tokio_fs::symlink(link_target, target_path).await?;
                         
-                        // Set permissions on symlink if mode is provided
-                        if let Ok(mode) = u32::from_str_radix(mode_str, 8) {
-                            self.set_file_mode(target_path, mode).await?;
-                        }
+                        // Skip setting permissions on symlinks for now - this may be causing issues
+                        // if let Ok(mode) = u32::from_str_radix(mode_str, 8) {
+                        //     self.set_file_mode(target_path, mode).await?;
+                        // }
                     }
                     #[cfg(windows)]
                     {

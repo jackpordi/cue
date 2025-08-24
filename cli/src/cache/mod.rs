@@ -108,15 +108,40 @@ impl CacheManager {
     
     /// Materialize cache entry outputs to the filesystem
     pub async fn materialize_outputs(&self, entry: &CacheEntry, base_path: &PathBuf) -> Result<()> {
+        use futures::stream::{FuturesUnordered, StreamExt};
+        
+        // Create a stream of futures for parallel execution
+        let mut futures = FuturesUnordered::new();
+        
         for (relative_path, blob_hash) in &entry.outputs {
             let target_path = base_path.join(relative_path);
+            let cas = self.cas.clone();
+            let blob_hash = blob_hash.clone();
+            let _relative_path = relative_path.clone();
             
-            // Retrieve file from CAS
-            self.cas.get_file(blob_hash, &target_path).await?;
-            debug!("Materialized output: {}", target_path.display());
+            futures.push(async move {
+                // Retrieve file from CAS
+                if let Err(e) = cas.get_file(&blob_hash, &target_path).await {
+                    return Err(cue_common::CueError::Cache(format!(
+                        "Failed to materialize file '{}' (hash: {}): {}", 
+                        target_path.display(), 
+                        blob_hash, 
+                        e
+                    )));
+                }
+                debug!("Materialized output: {}", target_path.display());
+                Ok(())
+            });
         }
         
-        debug!("Materialized {} outputs for cache entry {}", entry.outputs.len(), entry.id);
+        // Process all futures concurrently, but limit concurrency to avoid overwhelming the system
+        let mut count = 0;
+        while let Some(result) = futures.next().await {
+            result?; // Propagate any errors
+            count += 1;
+        }
+        
+        debug!("Materialized {} outputs for cache entry {}", count, entry.id);
         Ok(())
     }
     

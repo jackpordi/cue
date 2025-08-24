@@ -96,9 +96,20 @@ async fn main() -> Result<()> {
         tracing::Level::INFO
     };
     
-    tracing_subscriber::fmt()
-        .with_max_level(log_level)
-        .init();
+    if cli.verbose {
+        // Debug mode: show full formatting
+        tracing_subscriber::fmt()
+            .with_max_level(log_level)
+            .init();
+    } else {
+        // Non-debug mode: minimal formatting
+        tracing_subscriber::fmt()
+            .with_max_level(log_level)
+            .without_time()
+            .with_target(false)
+            .with_level(false)
+            .init();
+    }
     
     // CLI started successfully
     
