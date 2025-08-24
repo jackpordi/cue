@@ -1,0 +1,26 @@
+[project]
+name = "example-project"
+description = "A cue project"
+version = "0.1.0"
+
+[tasks.build]
+command = "cargo build"
+inputs = [
+    "src/**/*.rs",
+    "Cargo.toml",
+]
+outputs = ["target/"]
+dependencies = []
+cache = true
+description = "Build the project"
+
+[tasks.test]
+command = "cargo test"
+inputs = [
+    "src/**/*.rs",
+    "tests/**/*.rs",
+]
+outputs = []
+dependencies = ["build"]
+cache = true
+description = "Run tests"

@@ -3,12 +3,14 @@ pub mod build;
 pub mod test;
 pub mod clean;
 pub mod cache;
+pub mod init;
 
 pub use run::execute as run_execute;
 pub use build::execute as build_execute;
 pub use test::execute as test_execute;
 pub use clean::execute as clean_execute;
 pub use cache::execute as cache_execute;
+pub use init::execute as init_execute;
 
 use clap::Subcommand;
 

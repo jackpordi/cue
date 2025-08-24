@@ -140,14 +140,57 @@ cue/
 
 ## Configuration
 
-Create a `cue.toml` file in your project root:
+### Workspace Configuration
+
+Create a `cue.workspace.toml` file in your workspace root:
 
 ```toml
 [workspace]
+name = "my-monorepo"
+projects.auto_discover = true
+projects.exclude = [
+    "node_modules/",
+    ".git/",
+    "target/",
+]
+
+[cache]
+remote = "https://cache.company.com"
+size_limit = "50GB"
+eviction_policy = "lru"
+```
+
+#### Project Discovery
+
+By default, cue automatically discovers all `cue.toml` files in your workspace. You can configure this behavior:
+
+**Auto-discovery (default):**
+```toml
+[workspace]
+projects.auto_discover = true
+projects.exclude = ["node_modules/", ".git/"]
+```
+
+**Manual patterns:**
+```toml
+[workspace]
+projects.auto_discover = false
+projects.include = [
+    "projects/*/cue.toml",
+    "apps/*/cue.toml",
+]
+projects.exclude = ["node_modules/", ".git/"]
+```
+
+### Project Configuration
+
+Create a `cue.toml` file in each project directory:
+
+```toml
+[project]
 name = "my-project"
-cache_dir = ".cue/cache"
-cache_size_limit = "10GB"
-cache_max_age = "30d"
+description = "A cue project"
+version = "0.1.0"
 
 [tasks.build]
 command = "cargo build"
@@ -155,6 +198,7 @@ inputs = ["src/**/*.rs", "Cargo.toml"]
 outputs = ["target/"]
 dependencies = []
 cache = true
+description = "Build the project"
 
 [tasks.test]
 command = "cargo test"
@@ -162,6 +206,7 @@ inputs = ["src/**/*.rs", "tests/**/*.rs"]
 outputs = []
 dependencies = ["build"]
 cache = true
+description = "Run tests"
 ```
 
 ## Contributing

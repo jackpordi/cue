@@ -23,11 +23,23 @@ pub enum CueError {
     #[error("Chrono error: {0}")]
     Chrono(#[from] chrono::ParseError),
     
+    #[error("TOML error: {0}")]
+    Toml(#[from] toml::de::Error),
+    
+    #[error("TOML serialization error: {0}")]
+    TomlSerialize(#[from] toml::ser::Error),
+    
+    #[error("Glob pattern error: {0}")]
+    Glob(#[from] glob::PatternError),
+    
     #[error("Invalid configuration: {0}")]
     Config(String),
     
     #[error("Task execution failed: {0}")]
     TaskExecution(String),
+    
+    #[error("Execution error: {0}")]
+    Execution(String),
 }
 
 pub type Result<T> = std::result::Result<T, CueError>;

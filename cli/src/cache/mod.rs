@@ -10,15 +10,22 @@ use chrono::Utc;
 use serde_json;
 
 pub struct CacheManager {
-    cas: cas::ContentAddressableStore,
-    db: database::CacheDatabase,
+    pub cas: cas::ContentAddressableStore,
+    pub db: database::CacheDatabase,
     cache_dir: PathBuf,
 }
 
 impl CacheManager {
     pub async fn new(cache_dir: PathBuf) -> Result<Self> {
+        debug!("Initializing cache manager at: {}", cache_dir.display());
+        
+        // Ensure cache directory exists
+        tokio::fs::create_dir_all(&cache_dir).await?;
+        
         let cas = cas::ContentAddressableStore::new(cache_dir.join("cas"));
         let db = database::CacheDatabase::new(cache_dir.join("db.sqlite")).await?;
+        
+        debug!("Cache manager initialized successfully");
         
         Ok(Self {
             cas,
@@ -50,7 +57,7 @@ impl CacheManager {
                 key: key.clone(),
                 outputs: output_map,
                 metadata: cue_common::CacheMetadata {
-                    duration_ms: 0, // TODO: Store this in database
+                    duration_ms: action.duration_ms,
                     exit_code: action.exit_code,
                     stdout_hash: action.stdout_hash,
                     stderr_hash: action.stderr_hash,
@@ -78,6 +85,7 @@ impl CacheManager {
             exit_code: entry.metadata.exit_code,
             stdout_hash: entry.metadata.stdout_hash.clone(),
             stderr_hash: entry.metadata.stderr_hash.clone(),
+            duration_ms: entry.metadata.duration_ms,
             created_at: entry.created_at,
             last_access: entry.accessed_at,
         };
@@ -94,7 +102,7 @@ impl CacheManager {
         // Store output mappings
         self.db.store_outputs(&entry.id, &outputs).await?;
         
-        info!("Stored cache entry {} with {} outputs", entry.id, outputs.len());
+        debug!("Stored cache entry {} with {} outputs", entry.id, outputs.len());
         Ok(())
     }
     
@@ -108,7 +116,7 @@ impl CacheManager {
             debug!("Materialized output: {}", target_path.display());
         }
         
-        info!("Materialized {} outputs for cache entry {}", entry.outputs.len(), entry.id);
+        debug!("Materialized {} outputs for cache entry {}", entry.outputs.len(), entry.id);
         Ok(())
     }
     
@@ -120,6 +128,7 @@ impl CacheManager {
         stdout: Option<&[u8]>,
         stderr: Option<&[u8]>,
         output_files: &[(PathBuf, PathBuf)], // (source_path, relative_path)
+        duration_ms: i64,
     ) -> Result<Uuid> {
         let entry_id = Uuid::new_v4();
         let now = Utc::now();
@@ -150,7 +159,7 @@ impl CacheManager {
             key: key.clone(),
             outputs,
             metadata: cue_common::CacheMetadata {
-                duration_ms: 0, // TODO: Calculate actual duration
+                duration_ms,
                 exit_code,
                 stdout_hash,
                 stderr_hash,

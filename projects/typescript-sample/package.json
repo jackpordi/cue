@@ -1,0 +1,19 @@
+{
+  "name": "typescript-sample",
+  "version": "1.0.0",
+  "description": "A simple TypeScript project",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "start": "node dist/main.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "keywords": ["typescript", "sample"],
+  "author": "Your Name",
+  "license": "MIT"
+}

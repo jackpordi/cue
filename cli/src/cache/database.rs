@@ -14,10 +14,30 @@ impl CacheDatabase {
     pub async fn new(db_path: PathBuf) -> Result<Self> {
         // Create parent directory if it doesn't exist
         if let Some(parent) = db_path.parent() {
+            tracing::debug!("Creating parent directory: {}", parent.display());
             tokio::fs::create_dir_all(parent).await?;
         }
         
-        let database_url = format!("sqlite:{}", db_path.display());
+        // Convert path to absolute path and ensure it's properly formatted
+        let db_path = if db_path.is_relative() {
+            std::env::current_dir()?.join(db_path)
+        } else {
+            db_path
+        };
+        
+        tracing::debug!("Database path: {}", db_path.display());
+        tracing::debug!("Database path exists: {}", db_path.exists());
+        
+        // Create the database file if it doesn't exist
+        if !db_path.exists() {
+            tracing::debug!("Creating database file: {}", db_path.display());
+            tokio::fs::File::create(&db_path).await?;
+        }
+        
+        // Use the correct SQLite connection string format for sqlx
+        let database_url = format!("sqlite://{}", db_path.display());
+        tracing::debug!("Connecting to SQLite database: {}", database_url);
+        
         let pool = SqlitePool::connect(&database_url).await?;
         
         // Initialize database schema
@@ -35,6 +55,7 @@ impl CacheDatabase {
                 exit_code INTEGER NOT NULL,
                 stdout_hash TEXT,
                 stderr_hash TEXT,
+                duration_ms INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 last_access TEXT NOT NULL
             )
@@ -77,8 +98,8 @@ impl CacheDatabase {
     pub async fn store_action(&self, action: &ActionInfo) -> Result<()> {
         sqlx::query(
             r#"
-            INSERT OR REPLACE INTO actions (id, cache_key, exit_code, stdout_hash, stderr_hash, created_at, last_access)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO actions (id, cache_key, exit_code, stdout_hash, stderr_hash, duration_ms, created_at, last_access)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             "#
         )
         .bind(action.id.to_string())
@@ -86,6 +107,7 @@ impl CacheDatabase {
         .bind(action.exit_code)
         .bind(&action.stdout_hash)
         .bind(&action.stderr_hash)
+        .bind(action.duration_ms)
         .bind(action.created_at.to_rfc3339())
         .bind(action.last_access.to_rfc3339())
         .execute(&self.pool)
@@ -99,7 +121,7 @@ impl CacheDatabase {
     pub async fn get_action(&self, cache_key: &str) -> Result<Option<ActionInfo>> {
         let row = sqlx::query(
             r#"
-            SELECT id, cache_key, exit_code, stdout_hash, stderr_hash, created_at, last_access
+            SELECT id, cache_key, exit_code, stdout_hash, stderr_hash, duration_ms, created_at, last_access
             FROM actions WHERE cache_key = ?
             "#
         )
@@ -114,6 +136,7 @@ impl CacheDatabase {
                 exit_code: row.get("exit_code"),
                 stdout_hash: row.get("stdout_hash"),
                 stderr_hash: row.get("stderr_hash"),
+                duration_ms: row.get("duration_ms"),
                 created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<String, _>("created_at"))?.with_timezone(&Utc),
                 last_access: chrono::DateTime::parse_from_rfc3339(&row.get::<String, _>("last_access"))?.with_timezone(&Utc),
             };
@@ -238,14 +261,14 @@ impl CacheDatabase {
         let query = if let Some(limit) = limit {
             sqlx::query(
                 r#"
-                SELECT id, cache_key, exit_code, stdout_hash, stderr_hash, created_at, last_access
+                SELECT id, cache_key, exit_code, stdout_hash, stderr_hash, duration_ms, created_at, last_access
                 FROM actions ORDER BY last_access ASC LIMIT ?
                 "#
             ).bind(limit)
         } else {
             sqlx::query(
                 r#"
-                SELECT id, cache_key, exit_code, stdout_hash, stderr_hash, created_at, last_access
+                SELECT id, cache_key, exit_code, stdout_hash, stderr_hash, duration_ms, created_at, last_access
                 FROM actions ORDER BY last_access ASC
                 "#
             )
@@ -261,6 +284,7 @@ impl CacheDatabase {
                 exit_code: row.get("exit_code"),
                 stdout_hash: row.get("stdout_hash"),
                 stderr_hash: row.get("stderr_hash"),
+                duration_ms: row.get("duration_ms"),
                 created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<String, _>("created_at")).unwrap().with_timezone(&Utc),
                 last_access: chrono::DateTime::parse_from_rfc3339(&row.get::<String, _>("last_access")).unwrap().with_timezone(&Utc),
             })

@@ -1,0 +1,12 @@
+[workspace]
+name = "my-monorepo"
+projects.auto_discover = true
+projects.exclude = [
+    "node_modules/",
+    ".git/",
+    "target/",
+]
+
+[cache]
+size_limit = "50GB"
+eviction_policy = "lru"

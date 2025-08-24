@@ -1,0 +1,55 @@
+[project]
+name = "typescript-sample"
+description = "A TypeScript project with Yarn"
+version = "1.0.0"
+
+[tasks.install]
+command = "yarn"
+inputs = [
+    "package.json",
+    "yarn.lock",
+]
+outputs = ["node_modules/"]
+dependencies = []
+cache = true
+description = "Install dependencies"
+
+[tasks.build]
+command = "yarn build"
+inputs = [
+    "src/**/*.ts",
+    "package.json",
+    "tsconfig.json",
+]
+outputs = ["dist/"]
+dependencies = ["install"]
+cache = true
+description = "Build TypeScript project"
+
+[tasks.dev]
+command = "yarn dev"
+inputs = [
+    "src/**/*.ts",
+    "package.json",
+    "tsconfig.json",
+]
+outputs = []
+dependencies = ["install"]
+cache = false
+description = "Development mode with watch"
+
+[tasks.start]
+command = "yarn start"
+inputs = ["dist/"]
+outputs = []
+dependencies = ["build"]
+cache = false
+description = "Run the compiled application"
+
+[tasks.clean]
+command = "yarn clean"
+inputs = []
+outputs = []
+dependencies = []
+cache = false
+description = "Clean build artifacts"
