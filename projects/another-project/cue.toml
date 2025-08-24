@@ -26,9 +26,11 @@ cache = true
 description = "Build the project"
 
 [tasks.slow]
-command = "sleep 2"
+command = "sleep 5"
 inputs = []
 outputs = []
 dependencies = []
 cache = false
 description = "A slow task for testing"
+
+

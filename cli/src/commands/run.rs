@@ -3,8 +3,10 @@ use tracing::{info, debug};
 use owo_colors::OwoColorize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use tokio::sync::Semaphore;
 use std::collections::HashMap;
-use std::time::Instant;
+
+
 use crate::cache::CacheManager;
 use crate::config::ConfigManager;
 use crate::executor::TaskExecutor;
@@ -105,21 +107,20 @@ async fn compute_cache_key(
 #[derive(Debug, Clone)]
 enum TaskStatus {
     Running,
-    Success,
+    Success { duration_ms: u64, cached: bool },
     Failed(String),
 }
-
-const SPINNER_FRAMES: [&str; 4] = ["⠋", "⠙", "⠹", "⠸"];
 
 #[derive(Debug, Clone)]
 struct ProgressTracker {
     statuses: Arc<Mutex<HashMap<String, TaskStatus>>>,
-    start_time: Arc<Mutex<Instant>>,
     frame: Arc<Mutex<usize>>,
+    lines_printed: Arc<Mutex<usize>>,
+    max_concurrent: usize,
 }
 
 impl ProgressTracker {
-    fn new(project_names: Vec<String>) -> Self {
+    fn new(project_names: Vec<String>, _task_name: &str, max_concurrent: usize) -> Self {
         let mut statuses = HashMap::new();
         for project_name in project_names {
             statuses.insert(project_name, TaskStatus::Running);
@@ -127,8 +128,9 @@ impl ProgressTracker {
         
         Self {
             statuses: Arc::new(Mutex::new(statuses)),
-            start_time: Arc::new(Mutex::new(Instant::now())),
             frame: Arc::new(Mutex::new(0)),
+            lines_printed: Arc::new(Mutex::new(0)),
+            max_concurrent,
         }
     }
     
@@ -143,49 +145,112 @@ impl ProgressTracker {
             // Get current frame for spinner
             let frame_idx = if let Ok(mut frame) = self.frame.lock() {
                 let current = *frame;
-                *frame = (current + 1) % SPINNER_FRAMES.len();
+                *frame = (current + 1) % 4;
                 current
             } else {
                 0
             };
             
-            // Clear screen and move cursor to top
-            print!("\x1B[2J\x1B[H");
+            let spinner_frames = ["⠋", "⠙", "⠹", "⠸"];
             
-            let mut running = 0;
-            let mut success = 0;
-            let mut failed = 0;
+            // Move cursor up to overwrite previous lines
+            if let Ok(lines_printed) = self.lines_printed.lock() {
+                if *lines_printed > 0 {
+                    // Move cursor up by the number of lines we printed
+                    print!("\x1B[{}A", lines_printed);
+                }
+            }
             
-            // Print each project on its own line
+            let mut new_lines = 0;
+            
+            // Separate finished and running jobs
+            let mut finished_jobs = Vec::new();
+            let mut running_jobs = Vec::new();
+            
             for (project_name, status) in statuses.iter() {
                 match status {
                     TaskStatus::Running => {
-                        println!("- {} : {} {}", project_name, task_name, SPINNER_FRAMES[frame_idx].yellow());
-                        running += 1;
+                        running_jobs.push((project_name, status));
                     }
-                    TaskStatus::Success => {
-                        println!("- {} : {} {}", project_name, task_name, "✓".green());
-                        success += 1;
-                    }
-                    TaskStatus::Failed(_) => {
-                        println!("- {} : {} {}", project_name, task_name, "✗".red());
-                        failed += 1;
+                    TaskStatus::Success { .. } | TaskStatus::Failed(_) => {
+                        finished_jobs.push((project_name, status));
                     }
                 }
             }
             
-            let elapsed = if let Ok(start_time) = self.start_time.lock() {
-                start_time.elapsed()
-            } else {
-                std::time::Duration::from_secs(0)
-            };
-            let elapsed_str = if elapsed.as_millis() >= 1000 {
-                format!("{:.1}s", elapsed.as_millis() as f64 / 1000.0)
-            } else {
-                format!("{}ms", elapsed.as_millis())
-            };
+            // Print finished jobs first, then running jobs
+            for (project_name, status) in finished_jobs.iter().chain(running_jobs.iter()) {
+                // Clear the current line
+                print!("\r\x1B[K");
+                
+                // Calculate padding to align task names
+                let padding = if project_name.len() < 20 {
+                    20 - project_name.len()
+                } else {
+                    6
+                };
+                let task_padding = " ".repeat(padding);
+                
+                match status {
+                    TaskStatus::Running => {
+                        println!("  {} {}{} {}", spinner_frames[frame_idx].blue(), project_name, task_padding, task_name);
+                        new_lines += 1;
+                    }
+                    TaskStatus::Success { duration_ms, cached } => {
+                        let duration_str = if *duration_ms >= 1000 {
+                            format!("{:.1}s", *duration_ms as f64 / 1000.0)
+                        } else {
+                            format!("{}ms", duration_ms)
+                        };
+                        
+                        let status_text = if *cached {
+                            format!("  {} {}{} {} {}", "✓".green(), project_name, task_padding, task_name.green(), format!("(cached, {})", duration_str.green()))
+                        } else {
+                            format!("  {} {}{} {} {}", "✓".green(), project_name, task_padding, task_name.green(), duration_str.green())
+                        };
+                        println!("{}", status_text);
+                        new_lines += 1;
+                    }
+                    TaskStatus::Failed(error) => {
+                        println!("  {} {}{} {} {}", "✗".red(), project_name, task_padding, task_name.red(), error.red());
+                        new_lines += 1;
+                    }
+                }
+            }
             
-            println!("({} running, {} done, {} failed) - {}", running, success, failed, elapsed_str);
+            // Add summary line
+            let total_jobs = statuses.len();
+            let finished_count = finished_jobs.len();
+            let running_count = running_jobs.len();
+            
+            if total_jobs > 0 {
+                // Add a blank line for spacing
+                print!("\r\x1B[K");
+                println!("");
+                new_lines += 1;
+                
+                // Count failures
+                let failure_count = finished_jobs.iter()
+                    .filter(|(_, status)| matches!(status, TaskStatus::Failed(_)))
+                    .count();
+                
+                if running_count > 0 {
+                    print!("\r\x1B[K");
+                    println!("{}/{} jobs done, {} in progress", finished_count, total_jobs, running_count);
+                } else if failure_count > 0 {
+                    print!("\r\x1B[K");
+                    println!("{}/{} jobs done, {} failed", finished_count, total_jobs, failure_count);
+                } else {
+                    print!("\r\x1B[K");
+                    println!("{}/{} jobs done", finished_count, total_jobs);
+                }
+                new_lines += 1;
+            }
+            
+            // Update the number of lines we printed
+            if let Ok(mut lines_printed) = self.lines_printed.lock() {
+                *lines_printed = new_lines;
+            }
             
             // Flush stdout to ensure the output is displayed
             use std::io::{self, Write};
@@ -193,53 +258,7 @@ impl ProgressTracker {
         }
     }
     
-    fn finalize(&self) {
-        if let Ok(statuses) = self.statuses.lock() {
-            // Clear the current line and print final results
-            println!("\r\x1B[K");
-            
-            let mut success_count = 0;
-            let mut failure_count = 0;
-            let mut failures = Vec::new();
-            
-            for (project_name, status) in statuses.iter() {
-                match status {
-                    TaskStatus::Success => {
-                        success_count += 1;
-                    }
-                    TaskStatus::Failed(error) => {
-                        failure_count += 1;
-                        failures.push((project_name.clone(), error.clone()));
-                    }
-                    TaskStatus::Running => {
-                        // This shouldn't happen, but handle it gracefully
-                        failure_count += 1;
-                        failures.push((project_name.clone(), "Task did not complete".to_string()));
-                    }
-                }
-            }
-            
-            let total_duration = if let Ok(start_time) = self.start_time.lock() {
-                start_time.elapsed()
-            } else {
-                std::time::Duration::from_secs(0)
-            };
-            let total_str = if total_duration.as_millis() >= 1000 {
-                format!("{:.1}s", total_duration.as_millis() as f64 / 1000.0)
-            } else {
-                format!("{}ms", total_duration.as_millis())
-            };
-            
-            if failure_count == 0 {
-                info!("All {} projects completed successfully in {}", success_count, total_str);
-            } else {
-                info!("Completed {} projects, {} failed in {}", success_count, failure_count, total_str);
-                for (project_name, error) in failures {
-                    eprintln!("Project \"{}\" failed: {}", project_name, error);
-                }
-            }
-        }
-    }
+
 }
 
 /// Execute a task on all projects that have that task defined
@@ -250,6 +269,7 @@ async fn execute_on_all_projects(
     ignore_existing_cache: bool,
     no_cache: bool,
 ) -> Result<()> {
+    let start_time = std::time::Instant::now();
     info!("Running \"{}\" on all projects", task_name);
     
     // Find workspace root and initialize config manager
@@ -279,13 +299,23 @@ async fn execute_on_all_projects(
     
     info!("Found {} projects with task \"{}\"", projects_with_task.len(), task_name);
     
+    // Get number of CPU cores for concurrency limit
+    let num_cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    
+    info!("Using concurrency limit of {} tasks (based on {} CPU cores)", num_cores, num_cores);
+    
     // Create progress tracker
     let project_names: Vec<String> = projects_with_task.iter()
         .map(|(_, config)| config.project.name.clone())
         .collect();
-    let progress_tracker = ProgressTracker::new(project_names);
+    let progress_tracker = ProgressTracker::new(project_names, task_name, num_cores);
     
-    // Execute tasks concurrently
+    // Create semaphore to limit concurrent tasks
+    let semaphore = Arc::new(Semaphore::new(num_cores));
+    
+    // Execute tasks with concurrency limit
     let mut handles = Vec::new();
     
     for (project_path, project_config) in projects_with_task {
@@ -308,9 +338,13 @@ async fn execute_on_all_projects(
         let args = args.to_vec();
         let _remote_cache = _remote_cache.clone();
         let project_name_clone = project_name.clone();
+        let semaphore = semaphore.clone();
         
-        // Spawn task execution
+        // Spawn task execution with concurrency limit
         let handle = tokio::spawn(async move {
+            // Acquire permit from semaphore (blocks if no permits available)
+            let _permit = semaphore.acquire().await.unwrap();
+            
             let result = execute_single_task_silent(
                 &task,
                 &args,
@@ -323,16 +357,20 @@ async fn execute_on_all_projects(
             
             // Update progress
             let status = match &result {
-                Ok(_) => TaskStatus::Success,
+                Ok((duration_ms, cached)) => TaskStatus::Success { duration_ms: *duration_ms, cached: *cached },
                 Err(e) => TaskStatus::Failed(e.to_string()),
             };
             progress_tracker.update_status(&project_name_clone, status);
+            
+            // Permit is automatically released when _permit is dropped
             
             result
         });
         
         handles.push((project_name, handle));
     }
+    
+
     
     // Monitor progress and update display
     let progress_tracker_clone = progress_tracker.clone();
@@ -344,14 +382,14 @@ async fn execute_on_all_projects(
             // Check if all tasks are complete
             if let Ok(statuses) = progress_tracker_clone.statuses.lock() {
                 let all_complete = statuses.values().all(|status| {
-                    matches!(status, TaskStatus::Success | TaskStatus::Failed(_))
+                    matches!(status, TaskStatus::Success { .. } | TaskStatus::Failed(_))
                 });
                 if all_complete {
                     break;
                 }
             }
             
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
     });
     
@@ -373,15 +411,35 @@ async fn execute_on_all_projects(
     // Wait for progress display to finish
     progress_handle.await.ok();
     
-    // Print final results
-    progress_tracker.finalize();
+    // Print final results with simple newlines
+    let mut success_count = 0;
+    let mut failure_count = 0;
+    let mut failed_projects = Vec::new();
     
-    // Check if any tasks failed
-    let failure_count = results.iter().filter(|(_, result)| result.is_err()).count();
-    if failure_count > 0 {
-        return Err(cue_common::CueError::Execution(
-            format!("{} projects failed", failure_count)
-        ));
+    for (project_name, result) in results {
+        match result {
+            Ok(_) => success_count += 1,
+            Err(error) => {
+                failure_count += 1;
+                failed_projects.push((project_name, error));
+            }
+        }
+    }
+    
+    let total_time = std::time::Instant::now().duration_since(start_time);
+    
+    if failure_count == 0 {
+        println!();
+        println!("All {} projects completed successfully in {:.1}s", success_count, total_time.as_secs_f64());
+    } else {
+        println!();
+        println!("Completed {} projects, {} failed in {:.1}s", success_count, failure_count, total_time.as_secs_f64());
+        
+        for (project_name, error) in failed_projects {
+            println!("Project \"{}\" failed: {}", project_name, error);
+        }
+        
+        return Err(cue_common::CueError::Execution(format!("{} projects failed", failure_count)));
     }
     
     Ok(())
@@ -396,8 +454,8 @@ async fn execute_single_task_silent(
     _remote_cache: Option<String>,
     ignore_existing_cache: bool,
     no_cache: bool,
-) -> Result<()> {
-    let _start_time = std::time::Instant::now();
+) -> Result<(u64, bool)> {
+    let start_time = std::time::Instant::now();
     
     // Initialize config manager
     let mut config_manager = ConfigManager::new(workspace_root.clone());
@@ -433,7 +491,8 @@ async fn execute_single_task_silent(
                 cache_manager.materialize_outputs(&cache_entry, &working_dir).await?;
                 
                 // Don't restore stdout/stderr for silent execution
-                return Ok(());
+                let duration_ms = start_time.elapsed().as_millis() as u64;
+                return Ok((duration_ms, true));
             }
         } else {
             debug!("Cache miss, executing task");
@@ -480,7 +539,8 @@ async fn execute_single_task_silent(
         return Err(cue_common::CueError::Execution(error_msg));
     }
     
-    Ok(())
+    let duration_ms = start_time.elapsed().as_millis() as u64;
+    Ok((duration_ms, false))
 }
 
 /// Execute a single task (extracted from the main execute function for reuse)
@@ -611,5 +671,6 @@ async fn execute_single_task(
     info!("No cache hit. Total: {}, Command: {}, Cache: {}", total_str, command_str, cache_str);
     Ok(())
 }
+
 
 

@@ -1,18 +1,7 @@
 [project]
-name = "example-project"
+name = "project-11"
 description = "A cue project"
 version = "0.1.0"
-
-[tasks.build]
-command = "cargo build"
-inputs = [
-    "src/**/*.rs",
-    "Cargo.toml",
-]
-outputs = ["target/"]
-dependencies = []
-cache = true
-description = "Build the project"
 
 [tasks.test]
 command = "cargo test"
@@ -25,12 +14,21 @@ dependencies = ["build"]
 cache = true
 description = "Run tests"
 
+[tasks.build]
+command = "cargo build"
+inputs = [
+    "src/**/*.rs",
+    "Cargo.toml",
+]
+outputs = ["target/"]
+dependencies = []
+cache = true
+description = "Build the project"
+
 [tasks.slow]
-command = "sleep 8"
+command = "sleep 14"
 inputs = []
 outputs = []
 dependencies = []
 cache = false
 description = "A slow task for testing"
-
-
